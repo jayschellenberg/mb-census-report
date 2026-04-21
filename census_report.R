@@ -113,7 +113,8 @@ DEMO_FIELDS <- list(
   age_0_14            = list(label = "^0 to 14 years$",                                           parent = "Age"),
   age_15_64           = list(label = "^15 to 64 years$",                                          parent = "Age"),
   age_65_plus         = list(label = "^65 years and (over|older)$",                                parent = "Age"),
-  median_age          = list(label = "^Median age$",                                              parent = NA),
+  median_age          = list(label = "^Median age$",                                              parent = NA,
+                              agg   = "wmean_pop"),
   # Household size (apartment unit-mix signal)
   hh_size_total       = list(label = "^Private households by household size$",                   parent = NA),
   hh_size_1           = list(label = "^1 person$",                                                parent = "household size"),
@@ -121,7 +122,8 @@ DEMO_FIELDS <- list(
   hh_size_3           = list(label = "^3 persons$",                                               parent = "household size"),
   hh_size_4           = list(label = "^4 persons$",                                               parent = "household size"),
   hh_size_5plus       = list(label = "^5 or more persons$",                                       parent = "household size"),
-  avg_hh_size         = list(label = "^Average household size$",                                  parent = NA),
+  avg_hh_size         = list(label = "^Average household size$",                                  parent = NA,
+                              agg   = "wmean_hh"),
   # Occupied private dwellings by number of bedrooms (existing supply side)
   bed_total           = list(label = "^Total.*by number of bedrooms$",                            parent = NA),
   bed_0               = list(label = "^No bedrooms$",                                             parent = "number of bedrooms"),
@@ -144,14 +146,19 @@ DEMO_FIELDS <- list(
   owner               = list(label = "^Owner$",                                                   parent = "tenure"),
   renter              = list(label = "^Renter$",                                                  parent = "tenure"),
   # Shelter cost (2020 reference year in 2021 census)
-  median_dwelling_val = list(label = "^Median value of dwellings",                                parent = NA),
-  median_rent         = list(label = "^Median monthly shelter costs for rented dwellings",        parent = NA),
+  median_dwelling_val = list(label = "^Median value of dwellings",                                parent = NA,
+                              agg   = "wmean_hh"),
+  median_rent         = list(label = "^Median monthly shelter costs for rented dwellings",        parent = NA,
+                              agg   = "wmean_hh"),
   # Income (2020 reference year)
-  median_ind_income   = list(label = "^Median total income in 2020 among recipients",             parent = NA),
-  median_hh_income    = list(label = "^Median total income of household in 2020",                 parent = NA),
+  median_ind_income   = list(label = "^Median total income in 2020 among recipients",             parent = NA,
+                              agg   = "wmean_pop"),
+  median_hh_income    = list(label = "^Median total income of household in 2020",                 parent = NA,
+                              agg   = "wmean_hh"),
   # Shelter-cost stress (tenant households) — cancensus publishes this as a
   # pre-computed percentage (0-100 scale).
-  tenant_stir_30      = list(label = "^% of tenant households spending 30% or more",              parent = NA)
+  tenant_stir_30      = list(label = "^% of tenant households spending 30% or more",              parent = NA,
+                              agg   = "wmean_hh")
 )
 
 verify_vectors <- function(dataset = "CA21", fields = DEMO_FIELDS) {
@@ -214,7 +221,8 @@ find_region <- function(pattern, level = NULL, dataset = "CA21", top = 25) {
 # Pass level = "Regions" to get_census() to have cancensus sum the components
 # into a single aggregated row.
 
-fetch_region <- function(region_spec, dataset, vector_ids) {
+fetch_region <- function(region_spec, dataset, fields) {
+  vector_ids <- resolve_fields(dataset, fields)
   df <- get_census(
     dataset    = dataset,
     regions    = region_spec,
@@ -225,14 +233,31 @@ fetch_region <- function(region_spec, dataset, vector_ids) {
     geo_format = NA
   )
   # cancensus returns vector columns as "v_XXXX: label"; match by prefix.
-  # Collapse multiple returned rows (one per component region) to a single total.
+  # When region_spec unions multiple areas (e.g. DAs for a Winnipeg cluster),
+  # cancensus returns one row per component. Count fields are summed; medians,
+  # averages, and percentages are weighted-mean'd so we don't report nonsense
+  # like "summed percentages" for aggregated areas. Weights use the built-in
+  # Population or Households columns — true weights (e.g. renter count for
+  # rent medians) would be more precise but require extra vector fetches;
+  # Population / Households are close enough for appraisal commentary and
+  # the report footnotes the approximation when DA-aggregated.
+  agg_value <- function(df, col, agg) {
+    if (is.na(col)) return(NA)
+    vals <- df[[col]]
+    if (all(is.na(vals))) return(NA)
+    switch(agg,
+      sum       = sum(vals, na.rm = TRUE),
+      wmean_pop = stats::weighted.mean(vals, df$Population, na.rm = TRUE),
+      wmean_hh  = stats::weighted.mean(vals, df$Households, na.rm = TRUE),
+      sum(vals, na.rm = TRUE))
+  }
   out <- list()
-  for (nm in names(vector_ids)) {
+  for (nm in names(fields)) {
     vid <- vector_ids[[nm]]
     col <- grep(sprintf("^%s(:|$)", vid), names(df), value = TRUE)[1]
-    out[[nm]] <- if (is.na(col)) NA else sum(df[[col]], na.rm = TRUE)
+    agg <- fields[[nm]]$agg %||% "sum"
+    out[[nm]] <- agg_value(df, col, agg)
   }
-  # Built-in columns that cancensus always returns
   out$population      <- if ("Population" %in% names(df)) sum(df$Population, na.rm = TRUE) else NA
   out$total_dwellings <- if ("Dwellings"  %in% names(df)) sum(df$Dwellings,  na.rm = TRUE) else NA
   out$households      <- if ("Households" %in% names(df)) sum(df$Households, na.rm = TRUE) else NA
@@ -245,8 +270,7 @@ build_trends <- function(region_spec) {
   years <- names(DATASETS)
   rows <- map(years, function(y) {
     ds <- DATASETS[[y]]
-    ids <- resolve_fields(ds, TRENDS_FIELDS)
-    vals <- fetch_region(region_spec, ds, ids)
+    vals <- fetch_region(region_spec, ds, TRENDS_FIELDS)
     vals$year <- as.integer(y)
     vals
   })
@@ -260,9 +284,8 @@ build_trends <- function(region_spec) {
 
 build_demographics <- function(regions) {
   ds <- "CA21"
-  ids <- resolve_fields(ds, DEMO_FIELDS)
   rows <- imap(regions, function(spec, nm) {
-    vals <- fetch_region(spec, ds, ids)
+    vals <- fetch_region(spec, ds, DEMO_FIELDS)
     c(region = nm, vals)
   })
   bind_rows(rows)

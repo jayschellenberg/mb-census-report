@@ -37,28 +37,98 @@ if (!nzchar(Sys.getenv("CM_API_KEY"))) {
 # PR_UID == "46" (Winnipeg CMA, MB census divisions, MB CSDs).
 
 .raw_regions <- list_census_regions("CA21", use_cache = TRUE, quiet = TRUE)
-all_regions  <- .raw_regions[
+.mb_regions <- .raw_regions[
   .raw_regions$region == "46" |
   (!is.na(.raw_regions$PR_UID) & .raw_regions$PR_UID == "46"), ]
-all_regions$pop <- suppressWarnings(as.integer(all_regions$pop))
+.mb_regions <- data.frame(
+  region = .mb_regions$region,
+  name   = .mb_regions$name,
+  level  = .mb_regions$level,
+  pop    = suppressWarnings(as.integer(.mb_regions$pop)),
+  das    = NA_character_,       # only used for WPG virtual regions
+  stringsAsFactors = FALSE
+)
+
+# ---- Winnipeg virtual regions (Community Area / Cluster / Neighbourhood) --
+# Built from the one-time DA → City-of-Winnipeg geography lookup
+# (see scripts/build_wpg_lookup.R). Each virtual region carries the list of
+# StatCan DA IDs that compose it; when a user picks one the app submits
+# list(DA = <those ids>) to cancensus.
+.wpg_virtual <- local({
+  f <- "data/wpg_geography_lookup.csv"
+  if (!file.exists(f)) return(NULL)
+  d <- read.csv(f, stringsAsFactors = FALSE)
+  d <- d[!is.na(d$Neighbourhood), ]   # drop the un-matched DA
+  agg <- function(group_col, level_tag, region_prefix) {
+    split_df <- split(d, d[[group_col]])
+    do.call(rbind, lapply(names(split_df), function(nm) {
+      rows <- split_df[[nm]]
+      data.frame(
+        region = paste0(region_prefix, ":", nm),
+        name   = nm,
+        level  = level_tag,
+        pop    = sum(rows$Population, na.rm = TRUE),
+        das    = paste(rows$DA_UID, collapse = "|"),
+        stringsAsFactors = FALSE
+      )
+    }))
+  }
+  rbind(
+    agg("CommunityArea", "WPG_CA",      "WPG_CA"),
+    agg("Cluster",       "WPG_Cluster", "WPG_CL"),
+    agg("Neighbourhood", "WPG_Nbhd",    "WPG_NB")
+  )
+})
+
+all_regions <- rbind(.mb_regions, .wpg_virtual)
+
+# Pretty labels for levels (used in dropdown + disambiguation suffix)
+LEVEL_PRETTY <- c(
+  PR          = "PR",
+  CMA         = "CMA",
+  CD          = "CD",
+  CSD         = "CSD",
+  WPG_CA      = "Wpg CA",
+  WPG_Cluster = "Wpg Cluster",
+  WPG_Nbhd    = "Wpg Nbhd"
+)
+all_regions$level_display <- LEVEL_PRETTY[all_regions$level]
+
 all_regions$label <- ifelse(
   is.na(all_regions$pop),
-  sprintf("%s  [%s]",         all_regions$name, all_regions$level),
-  sprintf("%s  [%s, pop %s]", all_regions$name, all_regions$level,
+  sprintf("%s  [%s]",         all_regions$name, all_regions$level_display),
+  sprintf("%s  [%s, pop %s]", all_regions$name, all_regions$level_display,
           format(all_regions$pop, big.mark = ",", scientific = FALSE))
 )
 
-# Only levels that actually appear in Manitoba's catalog
-AVAILABLE_LEVELS <- sort(unique(all_regions$level))   # PR, CMA, CD, CSD
-DEFAULT_LEVELS   <- intersect(c("CSD", "CMA", "CD"), AVAILABLE_LEVELS)
-DEFAULT_R1       <- "4612047"   # RM of Springfield
-DEFAULT_R2       <- "46602"     # Winnipeg CMA
+# Only levels that actually appear in the combined catalog
+AVAILABLE_LEVELS <- c("PR","CMA","CD","CSD","WPG_CA","WPG_Cluster","WPG_Nbhd")
+AVAILABLE_LEVELS <- intersect(AVAILABLE_LEVELS, unique(all_regions$level))
+# Named vector for the checkbox UI (pretty name → internal code)
+LEVEL_CHOICES <- setNames(AVAILABLE_LEVELS, LEVEL_PRETTY[AVAILABLE_LEVELS])
+DEFAULT_LEVELS <- intersect(c("CSD","CMA","CD","WPG_CA","WPG_Cluster"),
+                            AVAILABLE_LEVELS)
+DEFAULT_R1     <- "4612047"   # RM of Springfield
+DEFAULT_R2     <- "46602"     # Winnipeg CMA
 
 build_choices <- function(levels_included) {
   df <- all_regions[all_regions$level %in% levels_included, ]
-  df <- df[order(match(df$level, c("PR","CMA","CD","CSD")),
+  df <- df[order(match(df$level, c("PR","CMA","CD","CSD",
+                                   "WPG_CA","WPG_Cluster","WPG_Nbhd")),
                  -df$pop, na.last = TRUE), ]
   setNames(df$region, df$label)
+}
+
+# Convert a selected all_regions row into a cancensus region spec.
+# Standard StatCan levels → list(<level> = "<id>").
+# Winnipeg virtual levels → list(DA = c(...)) unioning the composing DAs.
+make_region_spec <- function(row) {
+  if (grepl("^WPG_", row$level)) {
+    das <- strsplit(row$das, "|", fixed = TRUE)[[1]]
+    list(DA = das)
+  } else {
+    setNames(list(row$region), row$level)
+  }
 }
 
 # Names that appear at more than one level in Manitoba (e.g. Winnipeg = CSD + CMA).
@@ -68,7 +138,7 @@ build_choices <- function(levels_included) {
 
 display_name <- function(row) {
   if (length(row$name) == 1 && row$name %in% .ambiguous_names) {
-    sprintf("%s (%s)", row$name, row$level)
+    sprintf("%s (%s)", row$name, LEVEL_PRETTY[row$level])
   } else {
     as.character(row$name)
   }
@@ -201,12 +271,13 @@ ui <- fluidPage(
     sidebarPanel(
       width = 3,
       checkboxGroupInput(
-        "levels", "Manitoba geography levels:",
-        choices  = AVAILABLE_LEVELS,
+        "levels", "Geography levels:",
+        choices  = LEVEL_CHOICES,
         selected = DEFAULT_LEVELS, inline = TRUE
       ),
       div(class = "small-note",
-          "CSD = municipalities / RMs.  CD = census divisions.  CMA = Winnipeg."),
+          "CSD = municipalities / RMs.  CD = census divisions.  CMA = Winnipeg.  ",
+          "Wpg CA / Cluster / Nbhd = City-of-Winnipeg areas (DA-aggregated)."),
       tags$hr(),
       selectizeInput(
         "region1", "Region 1 (Trends + Demographics):",
@@ -276,8 +347,8 @@ server <- function(input, output, session) {
   regions_list <- reactive({
     s <- selection(); req(s)
     regs <- list()
-    regs[[display_name(s$r1)]] <- setNames(list(s$r1$region), s$r1$level)
-    regs[[display_name(s$r2)]] <- setNames(list(s$r2$region), s$r2$level)
+    regs[[display_name(s$r1)]] <- make_region_spec(s$r1)
+    regs[[display_name(s$r2)]] <- make_region_spec(s$r2)
     regs[["Manitoba"]] <- list(PR = "46")
     regs
   })
@@ -303,7 +374,7 @@ server <- function(input, output, session) {
                "Region 2 (Demographics)",
                "Region 3 (fixed)"),
       Name = c(display_name(s$r1), display_name(s$r2), "Manitoba"),
-      Level = c(s$r1$level, s$r2$level, "PR"),
+      Level = c(LEVEL_PRETTY[s$r1$level], LEVEL_PRETTY[s$r2$level], "PR"),
       ID    = c(s$r1$region, s$r2$region, "46"),
       Population = c(format(s$r1$pop, big.mark = ","),
                      format(s$r2$pop, big.mark = ","),

@@ -116,6 +116,30 @@ For map-based picking of Census Tracts / DAs, use <https://censusmapper.ca>.
 CMA is `"46602"`, not `"602"`. The `find_region()` helper prints the correct
 full ID in its `id` column — copy that value.
 
+### Winnipeg neighbourhood-level geographies
+
+The app also exposes **three City-of-Winnipeg geographies** that StatCan doesn't
+publish directly — Community Area (12), Cluster (23), Neighbourhood (~235).
+These are built by unioning the StatCan Dissemination Areas whose centroid
+falls within each City polygon.
+
+Counts (population, dwellings, age brackets, tenure, bedrooms, household size)
+are summed from the component DAs — exact to within StatCan's random-rounding
+(nearest 5). Medians, averages, and percentages (median income, median rent,
+average household size, % tenants spending 30%+ on shelter) are
+**population- or household-weighted means** across the component DAs —
+approximations of the true neighbourhood median/average. For City-boundary-
+exact numbers, use the City's own census reports at
+<https://legacy.winnipeg.ca/census/2021/>.
+
+To regenerate the DA → Winnipeg-area lookup after a City boundary update:
+```r
+# Requires the City neighbourhoods GeoJSON at the path configured in the script
+setwd("D:/Dropbox/ClaudeCode/MBCensusData")
+source("scripts/build_wpg_lookup.R")
+# → overwrites data/wpg_geography_lookup.csv
+```
+
 ## Fields by sheet
 
 ### Sheet 1 — Trends (2006 → 2021)
