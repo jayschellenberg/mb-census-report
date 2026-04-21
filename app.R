@@ -61,6 +61,19 @@ build_choices <- function(levels_included) {
   setNames(df$region, df$label)
 }
 
+# Names that appear at more than one level in Manitoba (e.g. Winnipeg = CSD + CMA).
+# Used to append "(LEVEL)" only when needed, so Region 1 and Region 2 never share
+# a header on the Demographics sheet.
+.ambiguous_names <- names(which(table(all_regions$name) > 1))
+
+display_name <- function(row) {
+  if (length(row$name) == 1 && row$name %in% .ambiguous_names) {
+    sprintf("%s (%s)", row$name, row$level)
+  } else {
+    as.character(row$name)
+  }
+}
+
 # ---- Formatting helpers ---------------------------------------------------
 
 fmt_int <- function(x) ifelse(is.na(x), "", format(round(x), big.mark = ","))
@@ -263,8 +276,8 @@ server <- function(input, output, session) {
   regions_list <- reactive({
     s <- selection(); req(s)
     regs <- list()
-    regs[[s$r1$name]] <- setNames(list(s$r1$region), s$r1$level)
-    regs[[s$r2$name]] <- setNames(list(s$r2$region), s$r2$level)
+    regs[[display_name(s$r1)]] <- setNames(list(s$r1$region), s$r1$level)
+    regs[[display_name(s$r2)]] <- setNames(list(s$r2$region), s$r2$level)
     regs[["Manitoba"]] <- list(PR = "46")
     regs
   })
@@ -289,7 +302,7 @@ server <- function(input, output, session) {
       Slot = c("Region 1 (Trends + Demographics)",
                "Region 2 (Demographics)",
                "Region 3 (fixed)"),
-      Name = c(s$r1$name, s$r2$name, "Manitoba"),
+      Name = c(display_name(s$r1), display_name(s$r2), "Manitoba"),
       Level = c(s$r1$level, s$r2$level, "PR"),
       ID    = c(s$r1$region, s$r2$region, "46"),
       Population = c(format(s$r1$pop, big.mark = ","),
@@ -368,7 +381,7 @@ server <- function(input, output, session) {
     filename = function() {
       s <- selection(); req(s)
       sprintf("Census_Report_%s_2021-%s.xlsx",
-              gsub("[^A-Za-z0-9]+", "_", s$r1$name),
+              gsub("[^A-Za-z0-9]+", "_", display_name(s$r1)),
               format(Sys.Date(), "%Y%m"))
     },
     content = function(file) {
