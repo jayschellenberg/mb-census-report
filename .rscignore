@@ -1,0 +1,7 @@
+Cancensus API Key.R
+*.xlsx
+*.Rproj
+.Rproj.user/
+.Rhistory
+diag.R
+run_report.R

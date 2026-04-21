@@ -1,0 +1,28 @@
+# Secrets — never commit
+Cancensus API Key.R
+.Renviron
+.Rprofile
+
+# R session state
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# RStudio
+*.Rproj
+
+# Local scripts / diagnostics
+diag.R
+*.tmp*
+
+# Generated outputs
+Census_Report_*.xlsx
+*.xlsx
+
+# OS
+Thumbs.db
+.DS_Store
+
+# rsconnect deploy state
+rsconnect/
