@@ -111,11 +111,16 @@ DEFAULT_LEVELS <- intersect(c("CSD","CMA","CD","WPG_CA","WPG_Cluster"),
 DEFAULT_R1     <- "4612047"   # RM of Springfield
 DEFAULT_R2     <- "46602"     # Winnipeg CMA
 
-build_choices <- function(levels_included) {
+build_choices <- function(levels_included, sort_by = c("pop", "name")) {
+  sort_by <- match.arg(sort_by)
   df <- all_regions[all_regions$level %in% levels_included, ]
-  df <- df[order(match(df$level, c("PR","CMA","CD","CSD",
-                                   "WPG_CA","WPG_Cluster","WPG_Nbhd")),
-                 -df$pop, na.last = TRUE), ]
+  if (sort_by == "name") {
+    df <- df[order(df$name), ]
+  } else {
+    df <- df[order(match(df$level, c("PR","CMA","CD","CSD",
+                                     "WPG_CA","WPG_Cluster","WPG_Nbhd")),
+                   -df$pop, na.last = TRUE), ]
+  }
   setNames(df$region, df$label)
 }
 
@@ -323,16 +328,20 @@ server <- function(input, output, session) {
   # region inputs here (without isolate) would create a feedback loop because
   # updateSelectizeInput writes back to them.
   observeEvent(input$levels, {
-    ch <- build_choices(input$levels)
+    # Region 1 sorts alphabetically by name (easier to scan an unfamiliar list).
+    # Region 2 sorts by population within level (Winnipeg CMA / Manitoba float
+    # to the top of the comparison column).
+    ch_name <- build_choices(input$levels, sort_by = "name")
+    ch_pop  <- build_choices(input$levels, sort_by = "pop")
     cur1 <- isolate(input$region1) %||% ""
     cur2 <- isolate(input$region2) %||% ""
-    sel1 <- if (nzchar(cur1) && cur1 %in% ch) cur1
-            else if (DEFAULT_R1 %in% ch) DEFAULT_R1 else ""
-    sel2 <- if (nzchar(cur2) && cur2 %in% ch) cur2
-            else if (DEFAULT_R2 %in% ch) DEFAULT_R2 else ""
-    updateSelectizeInput(session, "region1", choices = ch,
+    sel1 <- if (nzchar(cur1) && cur1 %in% ch_name) cur1
+            else if (DEFAULT_R1 %in% ch_name) DEFAULT_R1 else ""
+    sel2 <- if (nzchar(cur2) && cur2 %in% ch_pop)  cur2
+            else if (DEFAULT_R2 %in% ch_pop)  DEFAULT_R2 else ""
+    updateSelectizeInput(session, "region1", choices = ch_name,
                         selected = sel1, server = TRUE)
-    updateSelectizeInput(session, "region2", choices = ch,
+    updateSelectizeInput(session, "region2", choices = ch_pop,
                         selected = sel2, server = TRUE)
   }, ignoreNULL = FALSE)
 
